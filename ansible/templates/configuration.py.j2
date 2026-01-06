@@ -37,7 +37,11 @@ SECRET_KEY = '{{ netbox_secret_key }}'
 ALLOWED_HOSTS = ['*']
 
 # Base URL path
-BASE_PATH = ''
+BASE_PATH = 'mit0223/workspaces/demo-netbox-builder/proxy/8888/'
+
+# Django がプロキシ経由であることを認識するための設定
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Debug mode
 DEBUG = False

@@ -76,15 +76,34 @@ ansible-playbook -i inventory.yml playbook.yml
 
 ### 5. NetBox へのアクセス
 
-SSH ポートフォワーディングを使用して NetBox にアクセスします：
+DevContainer 内から SSH トンネルを確立します：
 
 ```bash
-ssh -i ../.ssh/id_ed25519 \
-    -L 8080:localhost:80 \
-    ubuntu@<INTERNAL_NIC_IP>
+# DevContainer内で実行
+.devcontainer/setup-netbox-tunnel.sh
 ```
 
-ブラウザで `http://localhost:8080` にアクセスしてください。
+その後、以下の方法でアクセスできます：
+
+**方法1: DevContainerのポートプロキシ経由（推奨）**
+```
+https://ws.demo.ops-frontier.dev/proxy/8888/
+```
+または VS Code の PORTS タブでポート8888のURLをクリック
+
+**方法2: DevContainer内から直接**
+```bash
+curl http://localhost:8888
+```
+
+初期ログイン情報:
+- ユーザー名: `admin`
+- パスワード: `admin`
+
+**注意**:
+- セキュリティのため、初回ログイン後すぐにパスワードを変更してください
+- SSHトンネルは `0.0.0.0:8888` でリッスンしています（VS Code ポートプロキシに必要）
+- DevContainerを再起動した場合は、再度 `setup-netbox-tunnel.sh` を実行してください
 
 ## プロジェクト構成
 

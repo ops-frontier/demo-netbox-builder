@@ -32,6 +32,33 @@ data "sakuracloud_switch" "internal" {
   }
 }
 
+# Startup script for network configuration
+resource "sakuracloud_note" "netbox_init" {
+  name  = "netbox-init-script"
+  class = "shell"
+  content = <<-EOT
+    #!/bin/bash
+    set -e
+
+    # Wait for network to be ready
+    sleep 5
+
+    # Configure static IP address
+    cat > /etc/netplan/99-sakura-custom.yaml <<EOF
+    network:
+      version: 2
+      ethernets:
+        eth0:
+          dhcp4: no
+          addresses:
+            - ${var.internal_nic_ip}
+    EOF
+
+    chmod 600 /etc/netplan/99-sakura-custom.yaml
+    netplan apply
+  EOT
+}
+
 # Server resource
 resource "sakuracloud_server" "netbox" {
   name        = "netbox-server"
@@ -47,11 +74,12 @@ resource "sakuracloud_server" "netbox" {
   # Disk configuration
   disks = [sakuracloud_disk.netbox.id]
 
-  # SSH key
-  ssh_key_ids = [sakuracloud_ssh_key.netbox_key.id]
-
-  # User data for cloud-init enabled images
-  user_data = sakuracloud_note.netbox_init.id
+  # Disk edit parameters for SSH key and startup script
+  disk_edit_parameter {
+    ssh_key_ids     = [sakuracloud_ssh_key.netbox_key.id]
+    disable_pw_auth = true
+    note_ids        = [sakuracloud_note.netbox_init.id]
+  }
 }
 
 # Disk resource
@@ -59,29 +87,6 @@ resource "sakuracloud_disk" "netbox" {
   name              = "netbox-disk"
   source_archive_id = data.sakuracloud_archive.ubuntu.id
   size              = 40
-
-  # Disable cloud-init and set up ubuntu user
-  # Ubuntu images without cloud-init support have a fixed 'ubuntu' user
-  # This configuration is for cloud-init enabled images
-  disk_plan = "ssd"
+  plan              = "ssd"
 }
 
-# Network interface configuration for static IP
-resource "sakuracloud_note" "netbox_init" {
-  name    = "netbox-init-script"
-  content = <<-EOT
-    #!/bin/bash
-    # Configure static IP address
-    cat > /etc/netplan/99-sakura-custom.yaml <<EOF
-    network:
-      version: 2
-      ethernets:
-        eth0:
-          dhcp4: no
-          addresses:
-            - ${var.internal_nic_ip}
-    EOF
-    chmod 600 /etc/netplan/99-sakura-custom.yaml
-    netplan apply
-  EOT
-}
