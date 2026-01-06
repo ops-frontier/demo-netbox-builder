@@ -1,0 +1,242 @@
+---
+- name: Install and configure NetBox
+  hosts: netbox
+  become: true
+  gather_facts: true
+
+  vars:
+    netbox_version: "v4.0"
+    netbox_database_name: netbox
+    netbox_database_user: netbox
+    netbox_database_password: "netbox_db_password_change_me"
+    netbox_secret_key: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=50') }}"
+    netbox_superuser_name: admin
+    netbox_superuser_email: admin@localhost
+    netbox_superuser_password: admin
+    redis_password: "redis_password_change_me"
+
+  tasks:
+    # Set up proxy environment
+    - name: Configure proxy environment variables in /etc/environment
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        line: "{{ item }}"
+        create: true
+        mode: '0644'
+      loop:
+        - "http_proxy=http://localhost:3128"
+        - "https_proxy=http://localhost:3128"
+        - "HTTP_PROXY=http://localhost:3128"
+        - "HTTPS_PROXY=http://localhost:3128"
+        - "no_proxy=localhost,127.0.0.1"
+        - "NO_PROXY=localhost,127.0.0.1"
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      environment:
+        http_proxy: "http://localhost:3128"
+        https_proxy: "http://localhost:3128"
+
+    # Install required system packages
+    - name: Install system dependencies
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - python3-dev
+          - build-essential
+          - libxml2-dev
+          - libxslt1-dev
+          - libffi-dev
+          - libpq-dev
+          - libssl-dev
+          - zlib1g-dev
+          - git
+          - postgresql
+          - postgresql-contrib
+          - redis-server
+          - nginx
+        state: present
+      environment:
+        http_proxy: "http://localhost:3128"
+        https_proxy: "http://localhost:3128"
+
+    # Configure PostgreSQL
+    - name: Start and enable PostgreSQL
+      ansible.builtin.systemd:
+        name: postgresql
+        state: started
+        enabled: true
+
+    - name: Create NetBox database
+      become_user: postgres
+      community.postgresql.postgresql_db:
+        name: "{{ netbox_database_name }}"
+        encoding: UTF-8
+        lc_collate: en_US.UTF-8
+        lc_ctype: en_US.UTF-8
+        template: template0
+
+    - name: Create NetBox database user
+      become_user: postgres
+      community.postgresql.postgresql_user:
+        db: "{{ netbox_database_name }}"
+        name: "{{ netbox_database_user }}"
+        password: "{{ netbox_database_password }}"
+        priv: ALL
+
+    # Configure Redis
+    - name: Configure Redis password
+      ansible.builtin.lineinfile:
+        path: /etc/redis/redis.conf
+        regexp: '^# requirepass'
+        line: "requirepass {{ redis_password }}"
+        state: present
+      notify: Restart Redis
+
+    - name: Start and enable Redis
+      ansible.builtin.systemd:
+        name: redis-server
+        state: started
+        enabled: true
+
+    # Install NetBox
+    - name: Create NetBox directory
+      ansible.builtin.file:
+        path: /opt/netbox
+        state: directory
+        mode: '0755'
+
+    - name: Clone NetBox repository
+      ansible.builtin.git:
+        repo: https://github.com/netbox-community/netbox.git
+        dest: /opt/netbox
+        version: "{{ netbox_version }}"
+        depth: 1
+      environment:
+        http_proxy: "http://localhost:3128"
+        https_proxy: "http://localhost:3128"
+
+    - name: Create NetBox system user
+      ansible.builtin.user:
+        name: netbox
+        system: true
+        home: /opt/netbox
+        shell: /bin/bash
+
+    - name: Set ownership of NetBox directory
+      ansible.builtin.file:
+        path: /opt/netbox
+        owner: netbox
+        group: netbox
+        recurse: true
+
+    - name: Copy NetBox configuration template
+      ansible.builtin.template:
+        src: configuration.py.j2
+        dest: /opt/netbox/netbox/netbox/configuration.py
+        owner: netbox
+        group: netbox
+        mode: '0644'
+
+    - name: Install NetBox Python dependencies
+      ansible.builtin.pip:
+        requirements: /opt/netbox/requirements.txt
+        virtualenv: /opt/netbox/venv
+        virtualenv_command: python3 -m venv
+      become_user: netbox
+      environment:
+        http_proxy: "http://localhost:3128"
+        https_proxy: "http://localhost:3128"
+
+    - name: Run NetBox database migrations
+      ansible.builtin.command:
+        cmd: /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py migrate
+      become_user: netbox
+      changed_when: true
+
+    - name: Collect static files
+      ansible.builtin.command:
+        cmd: /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py collectstatic --no-input
+      become_user: netbox
+      changed_when: true
+
+    - name: Create NetBox superuser
+      ansible.builtin.shell: |
+        echo "from django.contrib.auth import get_user_model; \
+        User = get_user_model(); \
+        User.objects.filter(username='{{ netbox_superuser_name }}').exists() or \
+        User.objects.create_superuser('{{ netbox_superuser_name }}', '{{ netbox_superuser_email }}', '{{ netbox_superuser_password }}')" | \
+        /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell
+      become_user: netbox
+      changed_when: true
+
+    # Configure systemd services
+    - name: Copy NetBox systemd service files
+      ansible.builtin.copy:
+        src: /opt/netbox/contrib/{{ item }}
+        dest: /etc/systemd/system/{{ item }}
+        remote_src: true
+        mode: '0644'
+      loop:
+        - netbox.service
+        - netbox-rq.service
+      notify: Reload systemd
+
+    - name: Start and enable NetBox services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+        daemon_reload: true
+      loop:
+        - netbox
+        - netbox-rq
+
+    # Configure Nginx
+    - name: Copy Nginx configuration for NetBox
+      ansible.builtin.copy:
+        src: /opt/netbox/contrib/nginx.conf
+        dest: /etc/nginx/sites-available/netbox
+        remote_src: true
+        mode: '0644'
+
+    - name: Enable NetBox site in Nginx
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/netbox
+        dest: /etc/nginx/sites-enabled/netbox
+        state: link
+
+    - name: Remove default Nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Start and enable Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+        enabled: true
+
+    - name: Display login information
+      ansible.builtin.debug:
+        msg:
+          - "NetBox installation completed!"
+          - "Access NetBox at: http://localhost:8080 (via SSH port forwarding)"
+          - "Default credentials:"
+          - "  Username: {{ netbox_superuser_name }}"
+          - "  Password: {{ netbox_superuser_password }}"
+          - "Please change the password after first login!"
+
+  handlers:
+    - name: Restart Redis
+      ansible.builtin.systemd:
+        name: redis-server
+        state: restarted
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
