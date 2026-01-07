@@ -1,0 +1,114 @@
+---
+- name: Clean up NetBox demo data
+  hosts: netbox
+  become: false
+  gather_facts: false
+
+  vars:
+    netbox_superuser_name: admin
+
+  tasks:
+    - name: Generate API token for NetBox
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo "from users.models import Token; \
+          from django.contrib.auth import get_user_model; \
+          User = get_user_model(); \
+          user = User.objects.get(username='{{ netbox_superuser_name }}'); \
+          token, created = Token.objects.get_or_create(user=user); \
+          print(token.key)" | \
+          /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell
+        executable: /bin/bash
+      become: true
+      become_user: netbox
+      register: api_token_result
+      changed_when: false
+
+    - name: Set NetBox API token fact
+      ansible.builtin.set_fact:
+        netbox_api_token: "{{ api_token_result.stdout | trim }}"
+
+    - name: Clean up demo data using Django management command
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          cat << 'PYTHON_SCRIPT' | /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell
+          from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, Rack, RackRole, Location
+          from extras.models import Tag
+          from django.db import transaction
+          from collections import Counter
+
+          # Count objects before deletion
+          devices_count = Device.objects.count()
+          device_types_count = DeviceType.objects.count()
+          device_roles_count = DeviceRole.objects.count()
+          manufacturers_count = Manufacturer.objects.count()
+          sites_count = Site.objects.count()
+          racks_count = Rack.objects.count()
+
+          print(f"Before cleanup:")
+          print(f"  Devices: {devices_count}")
+          print(f"  Device Types: {device_types_count}")
+          print(f"  Device Roles: {device_roles_count}")
+          print(f"  Manufacturers: {manufacturers_count}")
+          print(f"  Sites: {sites_count}")
+          print(f"  Racks: {racks_count}")
+
+          # Check for duplicates
+          print("\nChecking for duplicates:")
+          manufacturer_slugs = [m.slug for m in Manufacturer.objects.all()]
+          slug_counts = Counter(manufacturer_slugs)
+          duplicates = {slug: count for slug, count in slug_counts.items() if count > 1}
+          if duplicates:
+              print(f"  Found duplicate manufacturer slugs: {duplicates}")
+          else:
+              print("  No duplicate manufacturer slugs found")
+
+          # Delete in correct order (respecting foreign key constraints)
+          with transaction.atomic():
+              deleted_devices = Device.objects.all().delete()
+              print(f"Deleted {deleted_devices[0]} devices")
+
+              deleted_racks = Rack.objects.all().delete()
+              print(f"Deleted {deleted_racks[0]} racks")
+
+              deleted_sites = Site.objects.all().delete()
+              print(f"Deleted {deleted_sites[0]} sites")
+
+              deleted_device_types = DeviceType.objects.all().delete()
+              print(f"Deleted {deleted_device_types[0]} device types")
+
+              deleted_device_roles = DeviceRole.objects.all().delete()
+              print(f"Deleted {deleted_device_roles[0]} device roles")
+
+              deleted_manufacturers = Manufacturer.objects.all().delete()
+              print(f"Deleted {deleted_manufacturers[0]} manufacturers")
+
+          # Verify cleanup
+          print("\nAfter cleanup:")
+          print(f"  Devices: {Device.objects.count()}")
+          print(f"  Device Types: {DeviceType.objects.count()}")
+          print(f"  Device Roles: {DeviceRole.objects.count()}")
+          print(f"  Manufacturers: {Manufacturer.objects.count()}")
+          print(f"  Sites: {Site.objects.count()}")
+          print(f"  Racks: {Rack.objects.count()}")
+
+          print("\nCleanup completed successfully!")
+          PYTHON_SCRIPT
+        executable: /bin/bash
+      become: true
+      become_user: netbox
+      register: cleanup_result
+      changed_when: true
+
+    - name: Display cleanup results
+      ansible.builtin.debug:
+        var: cleanup_result.stdout_lines
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "Demo data cleanup completed!"
+          - "All devices, racks, sites, device types, device roles, and manufacturers have been removed."
+          - "You can now run populate-demo-data.yml to create fresh demo data."

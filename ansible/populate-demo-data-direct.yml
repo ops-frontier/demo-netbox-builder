@@ -1,0 +1,264 @@
+---
+- name: Populate NetBox with demo network infrastructure data (Direct Django ORM)
+  hosts: netbox
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Populate demo data using Django ORM
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          cat << 'PYTHON_SCRIPT' | /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell
+          from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, Rack
+          from django.db import transaction
+
+          print("Starting demo data population...")
+
+          with transaction.atomic():
+              # Create Manufacturers
+              print("\n=== Creating Manufacturers ===")
+              manufacturers_data = [
+                  {"name": "Cisco", "slug": "cisco", "description": "Cisco Systems, Inc."},
+                  {"name": "Juniper", "slug": "juniper", "description": "Juniper Networks"},
+                  {"name": "Palo Alto Networks", "slug": "palo-alto", "description": "Palo Alto Networks"},
+                  {"name": "Fortinet", "slug": "fortinet", "description": "Fortinet"},
+                  {"name": "Aruba", "slug": "aruba", "description": "Aruba Networks (HPE)"},
+                  {"name": "Ubiquiti", "slug": "ubiquiti", "description": "Ubiquiti Networks"},
+                  {"name": "Dell", "slug": "dell", "description": "Dell Technologies"},
+                  {"name": "HP", "slug": "hp", "description": "Hewlett Packard Enterprise"},
+              ]
+
+              manufacturers = {}
+              for data in manufacturers_data:
+                  manufacturer, created = Manufacturer.objects.get_or_create(
+                      slug=data["slug"],
+                      defaults={"name": data["name"], "description": data["description"]}
+                  )
+                  manufacturers[data["slug"]] = manufacturer
+                  status = "created" if created else "exists"
+                  print(f"  {data['name']}: {status}")
+
+              # Create Device Types
+              print("\n=== Creating Device Types ===")
+              device_types_data = [
+                  # Firewalls
+                  {"manufacturer": "palo-alto", "model": "PA-5220", "slug": "pa-5220", "u_height": 2},
+                  {"manufacturer": "fortinet", "model": "FortiGate 600E", "slug": "fortigate-600e", "u_height": 1},
+                  {"manufacturer": "cisco", "model": "ASA 5516-X", "slug": "asa-5516-x", "u_height": 1},
+                  # Switches
+                  {"manufacturer": "cisco", "model": "Catalyst 9300-48P", "slug": "c9300-48p", "u_height": 1},
+                  {"manufacturer": "cisco", "model": "Catalyst 9300-24P", "slug": "c9300-24p", "u_height": 1},
+                  {"manufacturer": "cisco", "model": "Nexus 9300", "slug": "n9k-c9300", "u_height": 1},
+                  {"manufacturer": "juniper", "model": "EX4300-48P", "slug": "ex4300-48p", "u_height": 1},
+                  {"manufacturer": "aruba", "model": "CX 6300M", "slug": "cx6300m", "u_height": 1},
+                  # Wireless
+                  {"manufacturer": "cisco", "model": "Catalyst 9800-40", "slug": "c9800-40", "u_height": 1},
+                  {"manufacturer": "aruba", "model": "7030", "slug": "aruba-7030", "u_height": 1},
+                  {"manufacturer": "cisco", "model": "Catalyst 9120AXI", "slug": "c9120axi", "u_height": 0},
+                  {"manufacturer": "aruba", "model": "AP-515", "slug": "ap-515", "u_height": 0},
+                  {"manufacturer": "ubiquiti", "model": "UniFi AP AC Pro", "slug": "uap-ac-pro", "u_height": 0},
+                  # Servers
+                  {"manufacturer": "dell", "model": "PowerEdge R740", "slug": "dell-r740", "u_height": 2},
+                  {"manufacturer": "dell", "model": "PowerEdge R640", "slug": "dell-r640", "u_height": 1},
+                  {"manufacturer": "hp", "model": "ProLiant DL380 Gen10", "slug": "hp-dl380-gen10", "u_height": 2},
+              ]
+
+              device_types = {}
+              for data in device_types_data:
+                  device_type, created = DeviceType.objects.get_or_create(
+                      slug=data["slug"],
+                      defaults={
+                          "manufacturer": manufacturers[data["manufacturer"]],
+                          "model": data["model"],
+                          "u_height": data["u_height"],
+                          "is_full_depth": True
+                      }
+                  )
+                  device_types[data["slug"]] = device_type
+                  status = "created" if created else "exists"
+                  print(f"  {data['model']}: {status}")
+
+              # Create Sites
+              print("\n=== Creating Sites ===")
+              sites_data = [
+                  {"name": "Tokyo HQ", "slug": "tokyo-hq", "description": "Tokyo Headquarters Data Center"},
+                  {"name": "Osaka Office", "slug": "osaka-office", "description": "Osaka Branch Office"},
+                  {"name": "Nagoya Office", "slug": "nagoya-office", "description": "Nagoya Branch Office"},
+              ]
+
+              sites = {}
+              for data in sites_data:
+                  site, created = Site.objects.get_or_create(
+                      slug=data["slug"],
+                      defaults={"name": data["name"], "description": data["description"], "status": "active"}
+                  )
+                  sites[data["slug"]] = site
+                  status = "created" if created else "exists"
+                  print(f"  {data['name']}: {status}")
+
+              # Create Racks
+              print("\n=== Creating Racks ===")
+              racks_data = [
+                  {"name": "TYO-RACK-01", "site": "tokyo-hq"},
+                  {"name": "TYO-RACK-02", "site": "tokyo-hq"},
+                  {"name": "TYO-RACK-03", "site": "tokyo-hq"},
+                  {"name": "OSA-RACK-01", "site": "osaka-office"},
+                  {"name": "OSA-RACK-02", "site": "osaka-office"},
+                  {"name": "NGO-RACK-01", "site": "nagoya-office"},
+              ]
+
+              racks = {}
+              for data in racks_data:
+                  rack, created = Rack.objects.get_or_create(
+                      name=data["name"],
+                      site=sites[data["site"]],
+                      defaults={"status": "active", "u_height": 42}
+                  )
+                  racks[data["name"]] = rack
+                  status = "created" if created else "exists"
+                  print(f"  {data['name']}: {status}")
+
+              # Create Device Roles
+              print("\n=== Creating Device Roles ===")
+              device_roles_data = [
+                  {"name": "Firewall", "slug": "firewall", "color": "f44336"},
+                  {"name": "Core Switch", "slug": "core-switch", "color": "2196f3"},
+                  {"name": "Access Switch", "slug": "access-switch", "color": "03a9f4"},
+                  {"name": "Distribution Switch", "slug": "dist-switch", "color": "0288d1"},
+                  {"name": "WLC", "slug": "wlc", "color": "9c27b0"},
+                  {"name": "Access Point", "slug": "access-point", "color": "ba68c8"},
+                  {"name": "RADIUS Server", "slug": "radius-server", "color": "4caf50"},
+                  {"name": "DHCP Server", "slug": "dhcp-server", "color": "8bc34a"},
+                  {"name": "DNS Server", "slug": "dns-server", "color": "cddc39"},
+                  {"name": "Application Server", "slug": "app-server", "color": "ff9800"},
+              ]
+
+              device_roles = {}
+              for data in device_roles_data:
+                  device_role, created = DeviceRole.objects.get_or_create(
+                      slug=data["slug"],
+                      defaults={"name": data["name"], "color": data["color"]}
+                  )
+                  device_roles[data["slug"]] = device_role
+                  status = "created" if created else "exists"
+                  print(f"  {data['name']}: {status}")
+
+              # Create Devices
+              print("\n=== Creating Devices ===")
+              devices_data = [
+                  # Tokyo HQ
+                  {"name": "tyo-fw-01", "type": "pa-5220", "role": "firewall", "site": "tokyo-hq", "rack": "TYO-RACK-01", "position": 40},
+                  {"name": "tyo-fw-02", "type": "fortigate-600e", "role": "firewall", "site": "tokyo-hq", "rack": "TYO-RACK-01", "position": 38},
+                  {"name": "tyo-core-sw-01", "type": "n9k-c9300", "role": "core-switch", "site": "tokyo-hq", "rack": "TYO-RACK-01", "position": 36},
+                  {"name": "tyo-core-sw-02", "type": "n9k-c9300", "role": "core-switch", "site": "tokyo-hq", "rack": "TYO-RACK-01", "position": 35},
+                  {"name": "tyo-dist-sw-01", "type": "c9300-48p", "role": "dist-switch", "site": "tokyo-hq", "rack": "TYO-RACK-01", "position": 33},
+                  {"name": "tyo-dist-sw-02", "type": "c9300-48p", "role": "dist-switch", "site": "tokyo-hq", "rack": "TYO-RACK-01", "position": 32},
+                  {"name": "tyo-acc-sw-01", "type": "c9300-24p", "role": "access-switch", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 40},
+                  {"name": "tyo-acc-sw-02", "type": "c9300-24p", "role": "access-switch", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 39},
+                  {"name": "tyo-acc-sw-03", "type": "c9300-24p", "role": "access-switch", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 38},
+                  {"name": "tyo-acc-sw-04", "type": "c9300-24p", "role": "access-switch", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 37},
+                  {"name": "tyo-acc-sw-05", "type": "cx6300m", "role": "access-switch", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 36},
+                  {"name": "tyo-acc-sw-06", "type": "cx6300m", "role": "access-switch", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 35},
+                  {"name": "tyo-wlc-01", "type": "c9800-40", "role": "wlc", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 33},
+                  {"name": "tyo-wlc-02", "type": "aruba-7030", "role": "wlc", "site": "tokyo-hq", "rack": "TYO-RACK-02", "position": 32},
+                  {"name": "tyo-ap-01", "type": "c9120axi", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-ap-02", "type": "c9120axi", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-ap-03", "type": "c9120axi", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-ap-04", "type": "ap-515", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-ap-05", "type": "ap-515", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-ap-06", "type": "ap-515", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-ap-07", "type": "uap-ac-pro", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-ap-08", "type": "uap-ac-pro", "role": "access-point", "site": "tokyo-hq"},
+                  {"name": "tyo-radius-01", "type": "dell-r640", "role": "radius-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 40},
+                  {"name": "tyo-radius-02", "type": "dell-r640", "role": "radius-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 39},
+                  {"name": "tyo-dhcp-01", "type": "dell-r640", "role": "dhcp-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 38},
+                  {"name": "tyo-dhcp-02", "type": "dell-r640", "role": "dhcp-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 37},
+                  {"name": "tyo-dns-01", "type": "dell-r740", "role": "dns-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 35},
+                  {"name": "tyo-dns-02", "type": "dell-r740", "role": "dns-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 33},
+                  {"name": "tyo-app-01", "type": "hp-dl380-gen10", "role": "app-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 31},
+                  {"name": "tyo-app-02", "type": "hp-dl380-gen10", "role": "app-server", "site": "tokyo-hq", "rack": "TYO-RACK-03", "position": 29},
+                  # Osaka Office
+                  {"name": "osa-fw-01", "type": "asa-5516-x", "role": "firewall", "site": "osaka-office", "rack": "OSA-RACK-01", "position": 40},
+                  {"name": "osa-core-sw-01", "type": "c9300-48p", "role": "core-switch", "site": "osaka-office", "rack": "OSA-RACK-01", "position": 38},
+                  {"name": "osa-acc-sw-01", "type": "c9300-24p", "role": "access-switch", "site": "osaka-office", "rack": "OSA-RACK-01", "position": 37},
+                  {"name": "osa-acc-sw-02", "type": "c9300-24p", "role": "access-switch", "site": "osaka-office", "rack": "OSA-RACK-01", "position": 36},
+                  {"name": "osa-acc-sw-03", "type": "ex4300-48p", "role": "access-switch", "site": "osaka-office", "rack": "OSA-RACK-01", "position": 35},
+                  {"name": "osa-wlc-01", "type": "c9800-40", "role": "wlc", "site": "osaka-office", "rack": "OSA-RACK-01", "position": 33},
+                  {"name": "osa-ap-01", "type": "c9120axi", "role": "access-point", "site": "osaka-office"},
+                  {"name": "osa-ap-02", "type": "c9120axi", "role": "access-point", "site": "osaka-office"},
+                  {"name": "osa-ap-03", "type": "ap-515", "role": "access-point", "site": "osaka-office"},
+                  {"name": "osa-ap-04", "type": "ap-515", "role": "access-point", "site": "osaka-office"},
+                  {"name": "osa-radius-01", "type": "dell-r640", "role": "radius-server", "site": "osaka-office", "rack": "OSA-RACK-02", "position": 40},
+                  {"name": "osa-dhcp-01", "type": "dell-r640", "role": "dhcp-server", "site": "osaka-office", "rack": "OSA-RACK-02", "position": 39},
+                  {"name": "osa-dns-01", "type": "dell-r740", "role": "dns-server", "site": "osaka-office", "rack": "OSA-RACK-02", "position": 37},
+                  {"name": "osa-app-01", "type": "hp-dl380-gen10", "role": "app-server", "site": "osaka-office", "rack": "OSA-RACK-02", "position": 35},
+                  # Nagoya Office
+                  {"name": "ngo-fw-01", "type": "fortigate-600e", "role": "firewall", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 40},
+                  {"name": "ngo-core-sw-01", "type": "c9300-48p", "role": "core-switch", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 38},
+                  {"name": "ngo-acc-sw-01", "type": "c9300-24p", "role": "access-switch", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 37},
+                  {"name": "ngo-acc-sw-02", "type": "cx6300m", "role": "access-switch", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 36},
+                  {"name": "ngo-wlc-01", "type": "aruba-7030", "role": "wlc", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 34},
+                  {"name": "ngo-ap-01", "type": "ap-515", "role": "access-point", "site": "nagoya-office"},
+                  {"name": "ngo-ap-02", "type": "ap-515", "role": "access-point", "site": "nagoya-office"},
+                  {"name": "ngo-ap-03", "type": "uap-ac-pro", "role": "access-point", "site": "nagoya-office"},
+                  {"name": "ngo-radius-01", "type": "dell-r640", "role": "radius-server", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 32},
+                  {"name": "ngo-dhcp-01", "type": "dell-r640", "role": "dhcp-server", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 31},
+                  {"name": "ngo-dns-01", "type": "dell-r740", "role": "dns-server", "site": "nagoya-office", "rack": "NGO-RACK-01", "position": 29},
+              ]
+
+              device_count = 0
+              for data in devices_data:
+                  defaults = {
+                      "device_type": device_types[data["type"]],
+                      "role": device_roles[data["role"]],
+                      "site": sites[data["site"]],
+                      "status": "active"
+                  }
+
+                  if "rack" in data:
+                      defaults["rack"] = racks[data["rack"]]
+                      defaults["position"] = data["position"]
+                      defaults["face"] = "front"
+
+                  device, created = Device.objects.get_or_create(
+                      name=data["name"],
+                      defaults=defaults
+                  )
+                  device_count += 1
+                  if device_count % 10 == 0:
+                      print(f"  Created {device_count} devices...")
+
+              print(f"  Total devices: {device_count}")
+
+          # Display summary
+          print("\n=== Summary ===")
+          print(f"Manufacturers: {Manufacturer.objects.count()}")
+          print(f"Device Types: {DeviceType.objects.count()}")
+          print(f"Device Roles: {DeviceRole.objects.count()}")
+          print(f"Sites: {Site.objects.count()}")
+          print(f"Racks: {Rack.objects.count()}")
+          print(f"Devices: {Device.objects.count()}")
+          print("\nDemo data population completed successfully!")
+          PYTHON_SCRIPT
+        executable: /bin/bash
+      become: true
+      become_user: netbox
+      register: populate_result
+      changed_when: true
+
+    - name: Display population results
+      ansible.builtin.debug:
+        var: populate_result.stdout_lines
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "Demo data population completed successfully!"
+          - "Access NetBox UI to view:"
+          - "  - 3 Sites (Tokyo HQ, Osaka Office, Nagoya Office)"
+          - "  - 6 Racks"
+          - "  - 8 Manufacturers"
+          - "  - 16 Device Types"
+          - "  - 10 Device Roles"
+          - "  - 55+ Devices (firewalls, switches, WLCs, APs, servers)"

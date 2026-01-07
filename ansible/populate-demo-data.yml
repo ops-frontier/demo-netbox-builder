@@ -1,0 +1,338 @@
+---
+- name: Populate NetBox with demo network infrastructure data
+  hosts: netbox
+  become: false
+  gather_facts: false
+
+  vars:
+    netbox_url: "http://localhost"
+    netbox_token: "{{ lookup('env', 'NETBOX_API_TOKEN') | default('0123456789abcdef0123456789abcdef01234567', true) }}"
+    netbox_superuser_name: admin
+    netbox_superuser_password: admin
+
+  tasks:
+    - name: Install pynetbox library on remote host
+      ansible.builtin.pip:
+        name: pynetbox
+        state: present
+      become: true
+
+    - name: Generate API token for NetBox
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo "from users.models import Token; \
+          from django.contrib.auth import get_user_model; \
+          User = get_user_model(); \
+          user = User.objects.get(username='{{ netbox_superuser_name }}'); \
+          token, created = Token.objects.get_or_create(user=user); \
+          print(token.key)" | \
+          /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py shell
+        executable: /bin/bash
+      become: true
+      become_user: netbox
+      register: api_token_result
+      changed_when: false
+
+    - name: Set NetBox API token fact
+      ansible.builtin.set_fact:
+        netbox_api_token: "{{ api_token_result.stdout | trim }}"
+
+    - name: Display API token (for debugging)
+      ansible.builtin.debug:
+        msg: "Using NetBox API Token: {{ netbox_api_token }}"
+
+    - name: Check NetBox API connectivity
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_api_token }}"
+        validate_certs: false
+        status_code: 200
+      register: api_check
+      failed_when: false
+
+    - name: Display API check result
+      ansible.builtin.debug:
+        var: api_check
+
+    # Create Manufacturers
+    - name: Create manufacturers
+      netbox.netbox.netbox_manufacturer:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          slug: "{{ item.slug }}"
+          description: "{{ item.description }}"
+        state: present
+      loop:
+        - { name: "Cisco", slug: "cisco", description: "Cisco Systems, Inc." }
+        - { name: "Juniper", slug: "juniper", description: "Juniper Networks" }
+        - { name: "Palo Alto Networks", slug: "palo-alto", description: "Palo Alto Networks" }
+        - { name: "Fortinet", slug: "fortinet", description: "Fortinet" }
+        - { name: "Aruba", slug: "aruba", description: "Aruba Networks (HPE)" }
+        - { name: "Ubiquiti", slug: "ubiquiti", description: "Ubiquiti Networks" }
+        - { name: "Dell", slug: "dell", description: "Dell Technologies" }
+        - { name: "HP", slug: "hp", description: "Hewlett Packard Enterprise" }
+
+    # Create Device Types
+    - name: Create device types
+      netbox.netbox.netbox_device_type:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          manufacturer: "{{ item.manufacturer }}"
+          model: "{{ item.model }}"
+          slug: "{{ item.slug }}"
+          u_height: "{{ item.u_height | default(1) }}"
+          is_full_depth: "{{ item.is_full_depth | default(true) }}"
+        state: present
+      loop:
+        # Firewalls
+        - { manufacturer: "Palo Alto Networks", model: "PA-5220", slug: "pa-5220", u_height: 2 }
+        - { manufacturer: "Fortinet", model: "FortiGate 600E", slug: "fortigate-600e", u_height: 1 }
+        - { manufacturer: "Cisco", model: "ASA 5516-X", slug: "asa-5516-x", u_height: 1 }
+        # Switches
+        - { manufacturer: "Cisco", model: "Catalyst 9300-48P", slug: "c9300-48p", u_height: 1 }
+        - { manufacturer: "Cisco", model: "Catalyst 9300-24P", slug: "c9300-24p", u_height: 1 }
+        - { manufacturer: "Cisco", model: "Nexus 9300", slug: "n9k-c9300", u_height: 1 }
+        - { manufacturer: "Juniper", model: "EX4300-48P", slug: "ex4300-48p", u_height: 1 }
+        - { manufacturer: "Aruba", model: "CX 6300M", slug: "cx6300m", u_height: 1 }
+        # Wireless
+        - { manufacturer: "Cisco", model: "Catalyst 9800-40", slug: "c9800-40", u_height: 1 }
+        - { manufacturer: "Aruba", model: "7030", slug: "aruba-7030", u_height: 1 }
+        - { manufacturer: "Cisco", model: "Catalyst 9120AXI", slug: "c9120axi", u_height: 0 }
+        - { manufacturer: "Aruba", model: "AP-515", slug: "ap-515", u_height: 0 }
+        - { manufacturer: "Ubiquiti", model: "UniFi AP AC Pro", slug: "uap-ac-pro", u_height: 0 }
+        # Servers
+        - { manufacturer: "Dell", model: "PowerEdge R740", slug: "dell-r740", u_height: 2 }
+        - { manufacturer: "Dell", model: "PowerEdge R640", slug: "dell-r640", u_height: 1 }
+        - { manufacturer: "HP", model: "ProLiant DL380 Gen10", slug: "hp-dl380-gen10", u_height: 2 }
+
+    # Create Sites
+    - name: Create sites
+      netbox.netbox.netbox_site:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          slug: "{{ item.slug }}"
+          status: active
+          description: "{{ item.description }}"
+        state: present
+      loop:
+        - { name: "Tokyo HQ", slug: "tokyo-hq", description: "Tokyo Headquarters Data Center" }
+        - { name: "Osaka Office", slug: "osaka-office", description: "Osaka Branch Office" }
+        - { name: "Nagoya Office", slug: "nagoya-office", description: "Nagoya Branch Office" }
+
+    # Create Racks for Tokyo HQ
+    - name: Create racks for Tokyo HQ
+      netbox.netbox.netbox_rack:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          site: "Tokyo HQ"
+          status: active
+          u_height: 42
+        state: present
+      loop:
+        - { name: "TYO-RACK-01" }
+        - { name: "TYO-RACK-02" }
+        - { name: "TYO-RACK-03" }
+
+    # Create Racks for Osaka Office
+    - name: Create racks for Osaka Office
+      netbox.netbox.netbox_rack:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          site: "Osaka Office"
+          status: active
+          u_height: 42
+        state: present
+      loop:
+        - { name: "OSA-RACK-01" }
+        - { name: "OSA-RACK-02" }
+
+    # Create Racks for Nagoya Office
+    - name: Create racks for Nagoya Office
+      netbox.netbox.netbox_rack:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          site: "Nagoya Office"
+          status: active
+          u_height: 42
+        state: present
+      loop:
+        - { name: "NGO-RACK-01" }
+
+    # Create Device Roles
+    - name: Create device roles
+      netbox.netbox.netbox_device_role:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          slug: "{{ item.slug }}"
+          color: "{{ item.color }}"
+          description: "{{ item.description }}"
+        state: present
+      loop:
+        - { name: "Firewall", slug: "firewall", color: "f44336", description: "Network firewall" }
+        - { name: "Core Switch", slug: "core-switch", color: "2196f3", description: "Core network switch" }
+        - { name: "Access Switch", slug: "access-switch", color: "03a9f4", description: "Access layer switch" }
+        - { name: "Distribution Switch", slug: "dist-switch", color: "0288d1", description: "Distribution layer switch" }
+        - { name: "WLC", slug: "wlc", color: "9c27b0", description: "Wireless LAN Controller" }
+        - { name: "Access Point", slug: "access-point", color: "ba68c8", description: "Wireless Access Point" }
+        - { name: "RADIUS Server", slug: "radius-server", color: "4caf50", description: "RADIUS Authentication Server" }
+        - { name: "DHCP Server", slug: "dhcp-server", color: "8bc34a", description: "DHCP Server" }
+        - { name: "DNS Server", slug: "dns-server", color: "cddc39", description: "DNS Server" }
+        - { name: "Application Server", slug: "app-server", color: "ff9800", description: "Application Server" }
+
+    # Create Devices - Tokyo HQ
+    - name: Create devices for Tokyo HQ
+      netbox.netbox.netbox_device:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          device_type: "{{ item.device_type }}"
+          device_role: "{{ item.role }}"
+          site: "Tokyo HQ"
+          rack: "{{ item.rack | default(omit) }}"
+          position: "{{ item.position | default(omit) }}"
+          face: "{{ item.face | default('front') }}"
+          status: active
+        state: present
+      loop:
+        # Firewalls
+        - { name: "tyo-fw-01", device_type: "PA-5220", role: "Firewall", rack: "TYO-RACK-01", position: 40 }
+        - { name: "tyo-fw-02", device_type: "FortiGate 600E", role: "Firewall", rack: "TYO-RACK-01", position: 38 }
+        # Core Switches
+        - { name: "tyo-core-sw-01", device_type: "Nexus 9300", role: "Core Switch", rack: "TYO-RACK-01", position: 36 }
+        - { name: "tyo-core-sw-02", device_type: "Nexus 9300", role: "Core Switch", rack: "TYO-RACK-01", position: 35 }
+        # Distribution Switches
+        - { name: "tyo-dist-sw-01", device_type: "Catalyst 9300-48P", role: "Distribution Switch", rack: "TYO-RACK-01", position: 33 }
+        - { name: "tyo-dist-sw-02", device_type: "Catalyst 9300-48P", role: "Distribution Switch", rack: "TYO-RACK-01", position: 32 }
+        # Access Switches
+        - { name: "tyo-acc-sw-01", device_type: "Catalyst 9300-24P", role: "Access Switch", rack: "TYO-RACK-02", position: 40 }
+        - { name: "tyo-acc-sw-02", device_type: "Catalyst 9300-24P", role: "Access Switch", rack: "TYO-RACK-02", position: 39 }
+        - { name: "tyo-acc-sw-03", device_type: "Catalyst 9300-24P", role: "Access Switch", rack: "TYO-RACK-02", position: 38 }
+        - { name: "tyo-acc-sw-04", device_type: "Catalyst 9300-24P", role: "Access Switch", rack: "TYO-RACK-02", position: 37 }
+        - { name: "tyo-acc-sw-05", device_type: "CX 6300M", role: "Access Switch", rack: "TYO-RACK-02", position: 36 }
+        - { name: "tyo-acc-sw-06", device_type: "CX 6300M", role: "Access Switch", rack: "TYO-RACK-02", position: 35 }
+        # WLC
+        - { name: "tyo-wlc-01", device_type: "Catalyst 9800-40", role: "WLC", rack: "TYO-RACK-02", position: 33 }
+        - { name: "tyo-wlc-02", device_type: "Aruba 7030", role: "WLC", rack: "TYO-RACK-02", position: 32 }
+        # Access Points (no rack/position for ceiling mounted)
+        - { name: "tyo-ap-01", device_type: "Catalyst 9120AXI", role: "Access Point" }
+        - { name: "tyo-ap-02", device_type: "Catalyst 9120AXI", role: "Access Point" }
+        - { name: "tyo-ap-03", device_type: "Catalyst 9120AXI", role: "Access Point" }
+        - { name: "tyo-ap-04", device_type: "AP-515", role: "Access Point" }
+        - { name: "tyo-ap-05", device_type: "AP-515", role: "Access Point" }
+        - { name: "tyo-ap-06", device_type: "AP-515", role: "Access Point" }
+        - { name: "tyo-ap-07", device_type: "UniFi AP AC Pro", role: "Access Point" }
+        - { name: "tyo-ap-08", device_type: "UniFi AP AC Pro", role: "Access Point" }
+        # Servers
+        - { name: "tyo-radius-01", device_type: "PowerEdge R640", role: "RADIUS Server", rack: "TYO-RACK-03", position: 40 }
+        - { name: "tyo-radius-02", device_type: "PowerEdge R640", role: "RADIUS Server", rack: "TYO-RACK-03", position: 39 }
+        - { name: "tyo-dhcp-01", device_type: "PowerEdge R640", role: "DHCP Server", rack: "TYO-RACK-03", position: 38 }
+        - { name: "tyo-dhcp-02", device_type: "PowerEdge R640", role: "DHCP Server", rack: "TYO-RACK-03", position: 37 }
+        - { name: "tyo-dns-01", device_type: "PowerEdge R740", role: "DNS Server", rack: "TYO-RACK-03", position: 35 }
+        - { name: "tyo-dns-02", device_type: "PowerEdge R740", role: "DNS Server", rack: "TYO-RACK-03", position: 33 }
+        - { name: "tyo-app-01", device_type: "ProLiant DL380 Gen10", role: "Application Server", rack: "TYO-RACK-03", position: 31 }
+        - { name: "tyo-app-02", device_type: "ProLiant DL380 Gen10", role: "Application Server", rack: "TYO-RACK-03", position: 29 }
+
+    # Create Devices - Osaka Office
+    - name: Create devices for Osaka Office
+      netbox.netbox.netbox_device:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          device_type: "{{ item.device_type }}"
+          device_role: "{{ item.role }}"
+          site: "Osaka Office"
+          rack: "{{ item.rack | default(omit) }}"
+          position: "{{ item.position | default(omit) }}"
+          face: "{{ item.face | default('front') }}"
+          status: active
+        state: present
+      loop:
+        # Firewalls
+        - { name: "osa-fw-01", device_type: "ASA 5516-X", role: "Firewall", rack: "OSA-RACK-01", position: 40 }
+        # Switches
+        - { name: "osa-core-sw-01", device_type: "Catalyst 9300-48P", role: "Core Switch", rack: "OSA-RACK-01", position: 38 }
+        - { name: "osa-acc-sw-01", device_type: "Catalyst 9300-24P", role: "Access Switch", rack: "OSA-RACK-01", position: 37 }
+        - { name: "osa-acc-sw-02", device_type: "Catalyst 9300-24P", role: "Access Switch", rack: "OSA-RACK-01", position: 36 }
+        - { name: "osa-acc-sw-03", device_type: "EX4300-48P", role: "Access Switch", rack: "OSA-RACK-01", position: 35 }
+        # WLC
+        - { name: "osa-wlc-01", device_type: "Catalyst 9800-40", role: "WLC", rack: "OSA-RACK-01", position: 33 }
+        # Access Points
+        - { name: "osa-ap-01", device_type: "Catalyst 9120AXI", role: "Access Point" }
+        - { name: "osa-ap-02", device_type: "Catalyst 9120AXI", role: "Access Point" }
+        - { name: "osa-ap-03", device_type: "AP-515", role: "Access Point" }
+        - { name: "osa-ap-04", device_type: "AP-515", role: "Access Point" }
+        # Servers
+        - { name: "osa-radius-01", device_type: "PowerEdge R640", role: "RADIUS Server", rack: "OSA-RACK-02", position: 40 }
+        - { name: "osa-dhcp-01", device_type: "PowerEdge R640", role: "DHCP Server", rack: "OSA-RACK-02", position: 39 }
+        - { name: "osa-dns-01", device_type: "PowerEdge R740", role: "DNS Server", rack: "OSA-RACK-02", position: 37 }
+        - { name: "osa-app-01", device_type: "ProLiant DL380 Gen10", role: "Application Server", rack: "OSA-RACK-02", position: 35 }
+
+    # Create Devices - Nagoya Office
+    - name: Create devices for Nagoya Office
+      netbox.netbox.netbox_device:
+        netbox_url: "{{ netbox_url }}"
+        netbox_token: "{{ netbox_api_token }}"
+        data:
+          name: "{{ item.name }}"
+          device_type: "{{ item.device_type }}"
+          device_role: "{{ item.role }}"
+          site: "Nagoya Office"
+          rack: "{{ item.rack | default(omit) }}"
+          position: "{{ item.position | default(omit) }}"
+          face: "{{ item.face | default('front') }}"
+          status: active
+        state: present
+      loop:
+        # Firewalls
+        - { name: "ngo-fw-01", device_type: "FortiGate 600E", role: "Firewall", rack: "NGO-RACK-01", position: 40 }
+        # Switches
+        - { name: "ngo-core-sw-01", device_type: "Catalyst 9300-48P", role: "Core Switch", rack: "NGO-RACK-01", position: 38 }
+        - { name: "ngo-acc-sw-01", device_type: "Catalyst 9300-24P", role: "Access Switch", rack: "NGO-RACK-01", position: 37 }
+        - { name: "ngo-acc-sw-02", device_type: "CX 6300M", role: "Access Switch", rack: "NGO-RACK-01", position: 36 }
+        # WLC
+        - { name: "ngo-wlc-01", device_type: "Aruba 7030", role: "WLC", rack: "NGO-RACK-01", position: 34 }
+        # Access Points
+        - { name: "ngo-ap-01", device_type: "AP-515", role: "Access Point" }
+        - { name: "ngo-ap-02", device_type: "AP-515", role: "Access Point" }
+        - { name: "ngo-ap-03", device_type: "UniFi AP AC Pro", role: "Access Point" }
+        # Servers
+        - { name: "ngo-radius-01", device_type: "PowerEdge R640", role: "RADIUS Server", rack: "NGO-RACK-01", position: 32 }
+        - { name: "ngo-dhcp-01", device_type: "PowerEdge R640", role: "DHCP Server", rack: "NGO-RACK-01", position: 31 }
+        - { name: "ngo-dns-01", device_type: "PowerEdge R740", role: "DNS Server", rack: "NGO-RACK-01", position: 29 }
+
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "Demo data population completed successfully!"
+          - "Summary of created objects:"
+          - "  - 3 Sites (Tokyo HQ, Osaka Office, Nagoya Office)"
+          - "  - 6 Racks"
+          - "  - 8 Manufacturers"
+          - "  - 18 Device Types"
+          - "  - 10 Device Roles"
+          - "  - Total Devices: 55+"
+          - "    * Firewalls: 5"
+          - "    * Switches: 21"
+          - "    * WLCs: 4"
+          - "    * Access Points: 18"
+          - "    * Servers: 15"
+          - ""
+          - "Access NetBox to view your demo infrastructure!"

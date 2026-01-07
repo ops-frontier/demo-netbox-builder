@@ -105,6 +105,60 @@ curl http://localhost:8888
 - SSHトンネルは `0.0.0.0:8888` でリッスンしています（VS Code ポートプロキシに必要）
 - DevContainerを再起動した場合は、再度 `setup-netbox-tunnel.sh` を実行してください
 
+### 6. デモデータの投入（オプション）
+
+NetBox にデモ用のネットワークインフラデータを投入できます：
+
+```bash
+cd ansible
+
+# 既存のデモデータをクリーンアップ（必要な場合）
+ansible-playbook -i inventory.yml cleanup-demo-data.yml
+
+# デモデータを投入（Django ORM直接版 - 推奨）
+ansible-playbook -i inventory.yml populate-demo-data-direct.yml
+```
+
+**注意**:
+- 既にデータが存在する場合や、以前の実行で重複データが作成された場合は、必ず `cleanup-demo-data.yml` を先に実行してください。
+- `populate-demo-data-direct.yml` は Django ORM を直接使用するため、より確実で高速です（推奨）。
+- `populate-demo-data.yml` は NetBox Ansible コレクションを使用する従来版です。
+
+このプレイブックは以下のデモデータを作成します：
+
+**サイト構成:**
+- Tokyo HQ（東京本社データセンター）
+- Osaka Office（大阪支社）
+- Nagoya Office（名古屋支社）
+
+**作成されるデバイス（合計 55台以上）:**
+- ファイアウォール: 5台
+  - Palo Alto PA-5220
+  - Fortinet FortiGate 600E
+  - Cisco ASA 5516-X
+- スイッチ: 21台
+  - Cisco Catalyst 9300/Nexus 9300
+  - Juniper EX4300
+  - Aruba CX 6300M
+- WLC（無線LANコントローラー）: 4台
+  - Cisco Catalyst 9800-40
+  - Aruba 7030
+- WiFi アクセスポイント: 18台
+  - Cisco Catalyst 9120AXI
+  - Aruba AP-515
+  - Ubiquiti UniFi AP AC Pro
+- サーバ: 15台
+  - RADIUS サーバ
+  - DHCP サーバ
+  - DNS サーバ
+  - アプリケーションサーバ
+
+**その他:**
+- 8社のメーカー情報
+- 18種類のデバイスタイプ
+- 10種類のデバイスロール
+- 6個のラック
+
 ## プロジェクト構成
 
 ```
@@ -120,6 +174,9 @@ curl http://localhost:8888
 │   ├── ansible.cfg          # Ansible 設定
 │   ├── inventory.yml        # インベントリ
 │   ├── playbook.yml         # メインプレイブック
+│   ├── populate-demo-data-direct.yml  # デモデータ投入（Django ORM版・推奨）
+│   ├── populate-demo-data.yml  # デモデータ投入（Ansible Collection版）
+│   ├── cleanup-demo-data.yml   # デモデータクリーンアッププレイブック
 │   ├── requirements.yml     # 必要な Ansible コレクション
 │   └── templates/
 │       └── configuration.py.j2  # NetBox 設定テンプレート
